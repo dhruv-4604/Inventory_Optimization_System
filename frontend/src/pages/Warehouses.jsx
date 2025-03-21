@@ -45,10 +45,14 @@ import {
   Check as CheckIcon,
   ExpandMore as ExpandMoreIcon,
   Warehouse as WarehouseIcon,
-  ViewModule as CompartmentIcon
+  ViewModule as CompartmentIcon,
+  Search as SearchIcon,
+  Clear as ClearIcon
 } from '@mui/icons-material';
 
 import { useData } from '../contexts/DataContext';
+import { binarySearch } from '../utils/binarySearch';
+import { insertionSort } from '../utils/insertionSort';
 
 const Warehouses = () => {
   const location = useLocation();
@@ -98,6 +102,13 @@ const Warehouses = () => {
     warehousesError,
     compartmentsError
   } = useData();
+
+  // Add search and sort functionality
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortConfig, setSortConfig] = useState({
+    field: 'name',
+    ascending: true
+  });
 
   useEffect(() => {
     // Update tab if navigation state changes
@@ -302,285 +313,347 @@ const Warehouses = () => {
     return items.filter(item => item.compartment_id === compartmentId);
   };
 
-  // Helper function to calculate storage usage
+  // Calculate compartment usage with detailed information
   const calculateCompartmentUsage = (compartmentId, capacity) => {
-    const compartmentItems = getCompartmentItems(compartmentId);
-    const totalSize = compartmentItems.reduce((sum, item) => sum + (item.size * item.quantity), 0);
-    return { used: totalSize, percentage: Math.min(100, Math.round((totalSize / capacity) * 100)) };
+    const compartmentItems = items.filter(item => item.compartment_id === compartmentId);
+    const usedCapacity = compartmentItems.reduce((total, item) => {
+      return total + (item.size * item.quantity);
+    }, 0);
+    
+    const remainingCapacity = capacity - usedCapacity;
+    const usagePercentage = (usedCapacity / capacity) * 100;
+    
+    return {
+      used: usedCapacity,
+      remaining: remainingCapacity,
+      percentage: usagePercentage,
+      items: compartmentItems.length
+    };
   };
 
-  return (
-    <Box>
-      <Box sx={{ mb: 3 }}>
-        <Typography variant="h4" gutterBottom>
-          Warehouses & Storage
-        </Typography>
-        <Paper sx={{ mb: 3 }}>
-          <Tabs value={tabValue} onChange={handleTabChange} centered>
-            <Tab 
-              label="Warehouses" 
-              icon={<WarehouseIcon />} 
-              iconPosition="start"
-            />
-            <Tab 
-              label="Compartments" 
-              icon={<CompartmentIcon />} 
-              iconPosition="start"
-            />
-          </Tabs>
-        </Paper>
-      </Box>
-      
-      {/* Warehouses Tab */}
-      {tabValue === 0 && (
-        <Box>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-            <Typography variant="h6">
-              Manage Warehouses
-            </Typography>
-            <Button
-              variant="contained"
-              startIcon={<AddIcon />}
-              onClick={() => handleOpenWarehouseDialog('add')}
-            >
-              Add Warehouse
-            </Button>
-          </Box>
-          
-          {/* Error message from context */}
-          {warehousesError && (
-            <Alert severity="error" sx={{ mb: 2 }}>
-              {warehousesError}
-            </Alert>
-          )}
-          
-          {/* Warehouses list */}
-          {loadingWarehouses ? (
-            <Box sx={{ display: 'flex', justifyContent: 'center', my: 4 }}>
-              <CircularProgress />
-            </Box>
-          ) : warehouses.length === 0 ? (
-            <Paper sx={{ p: 4, textAlign: 'center' }}>
-              <WarehouseIcon sx={{ fontSize: 60, color: 'text.secondary', mb: 2 }} />
-              <Typography variant="h6" color="text.secondary" gutterBottom>
-                No warehouses found
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                Add your first warehouse to get started
-              </Typography>
-            </Paper>
-          ) : (
-            <Grid container spacing={3}>
-              {warehouses.map(warehouse => {
-                const warehouseCompartments = getWarehouseCompartments(warehouse._id);
-                const totalCapacity = warehouseCompartments.reduce((sum, comp) => sum + comp.capacity, 0);
-                const totalUsed = warehouseCompartments.reduce((sum, comp) => {
-                  const usage = calculateCompartmentUsage(comp._id, comp.capacity);
-                  return sum + usage.used;
-                }, 0);
-                const usagePercentage = totalCapacity > 0 ? 
-                  Math.min(100, Math.round((totalUsed / totalCapacity) * 100)) : 0;
-                
-                return (
-                  <Grid item xs={12} md={6} key={warehouse._id}>
-                    <Paper sx={{ p: 0, overflow: 'hidden' }}>
-                      <Box sx={{ 
-                        p: 2, 
-                        borderBottom: 1, 
-                        borderColor: 'divider',
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center'
-                      }}>
+  // Filter and sort warehouses using our algorithms
+  const getFilteredWarehouses = () => {
+    let filteredWarehouses = [...warehouses];
+    
+    // Apply binary search for search query
+    if (searchQuery) {
+      filteredWarehouses = binarySearch(filteredWarehouses, searchQuery, 'name');
+    }
+    
+    // Apply sorting using insertion sort
+    return insertionSort(filteredWarehouses, sortConfig.field, sortConfig.ascending);
+  };
+  
+  // Handle sort
+  const handleSort = (field) => {
+    setSortConfig(prevConfig => ({
+      field,
+      ascending: prevConfig.field === field ? !prevConfig.ascending : true
+    }));
+  };
+  
+  // Handle search input change
+  const handleSearchChange = (e) => {
+    setSearchQuery(e.target.value);
+  };
+  
+  // Clear search
+  const handleClearSearch = () => {
+    setSearchQuery('');
+  };
+
+  // Render warehouse compartments
+  const renderWarehouseCompartments = (warehouseId) => {
+    const warehouseCompartments = getWarehouseCompartments(warehouseId);
+    
+    return (
+      <>
+        {warehouseCompartments.length === 0 ? (
+          <Typography color="text.secondary" sx={{ mt: 2 }}>
+            No compartments found for this warehouse.
+          </Typography>
+        ) : (
+          <Grid container spacing={2} sx={{ mt: 1 }}>
+            {warehouseCompartments.map(compartment => {
+              const usage = calculateCompartmentUsage(compartment._id, compartment.capacity);
+              const usageColor = 
+                usage.percentage > 90 ? 'error' :
+                usage.percentage > 70 ? 'warning' :
+                'primary';
+              
+              return (
+                <Grid item xs={12} sm={6} md={4} key={compartment._id}>
+                  <Card variant="outlined">
+                    <CardContent>
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                        <Typography variant="h6" component="div">
+                          {compartment.name}
+                        </Typography>
                         <Box>
-                          <Typography variant="h6">{warehouse.name}</Typography>
-                          <Typography variant="body2" color="text.secondary">
-                            {warehouse.location || 'No location specified'}
-                          </Typography>
-                        </Box>
-                        <Box>
-                          <Tooltip title="Edit">
-                            <IconButton 
-                              size="small" 
-                              color="primary"
-                              onClick={() => handleOpenWarehouseDialog('edit', warehouse)}
-                            >
-                              <EditIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                          <Tooltip title="Delete">
-                            <IconButton 
-                              size="small" 
-                              color="error"
-                              onClick={() => handleOpenWarehouseDialog('delete', warehouse)}
-                              disabled={warehouseCompartments.length > 0}
-                            >
-                              <DeleteIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
+                          <IconButton 
+                            size="small" 
+                            color="primary"
+                            onClick={() => handleOpenCompartmentDialog('edit', compartment)}
+                          >
+                            <EditIcon fontSize="small" />
+                          </IconButton>
+                          <IconButton 
+                            size="small" 
+                            color="error"
+                            onClick={() => handleOpenCompartmentDialog('delete', compartment)}
+                          >
+                            <DeleteIcon fontSize="small" />
+                          </IconButton>
                         </Box>
                       </Box>
                       
-                      <Box sx={{ p: 2 }}>
-                        <Grid container spacing={2} sx={{ mb: 2 }}>
-                          <Grid item xs={4}>
-                            <Typography variant="body2" color="text.secondary">
-                              Compartments
-                            </Typography>
-                            <Typography variant="h6">
-                              {warehouseCompartments.length}
-                            </Typography>
-                          </Grid>
-                          <Grid item xs={4}>
-                            <Typography variant="body2" color="text.secondary">
-                              Total Capacity
-                            </Typography>
-                            <Typography variant="h6">
-                              {warehouse.capacity || 0}
-                            </Typography>
-                          </Grid>
-                          <Grid item xs={4}>
-                            <Typography variant="body2" color="text.secondary">
-                              Usage
-                            </Typography>
-                            <Typography variant="h6">
-                              {usagePercentage}%
-                            </Typography>
-                          </Grid>
-                        </Grid>
-                        
-                        <Box sx={{ mb: 2 }}>
-                          <Typography variant="body2" color="text.secondary" gutterBottom>
-                            Compartment Capacity: {totalCapacity} of {warehouse.capacity || 0} used
-                          </Typography>
-                          <LinearProgress 
-                            variant="determinate" 
-                            value={usagePercentage}
-                            color={usagePercentage > 90 ? "error" : usagePercentage > 70 ? "warning" : "success"}
-                            sx={{ height: 8, borderRadius: 4 }}
-                          />
-                        </Box>
-                        
-                        <Divider sx={{ my: 2 }} />
-                        
-                        <Typography variant="subtitle2" gutterBottom>
-                          Compartments
+                      <Typography variant="body2" color="text.secondary" gutterBottom>
+                        Capacity: {compartment.capacity} units
+                      </Typography>
+                      
+                      <Box sx={{ mt: 2, mb: 1 }}>
+                        <Typography variant="body2" color="text.secondary" sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                          <span>Storage Usage:</span>
+                          <span>{Math.round(usage.percentage)}% ({usage.used}/{compartment.capacity})</span>
                         </Typography>
-                        
-                        {warehouseCompartments.length === 0 ? (
-                          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                            No compartments in this warehouse
-                          </Typography>
-                        ) : (
-                          <TableContainer component={Paper} variant="outlined" sx={{ mb: 2 }}>
-                            <Table size="small">
-                              <TableHead>
-                                <TableRow>
-                                  <TableCell>Name</TableCell>
-                                  <TableCell align="right">Capacity</TableCell>
-                                  <TableCell align="right">Maintenance</TableCell>
-                                  <TableCell align="right">Usage</TableCell>
-                                  <TableCell align="right">Actions</TableCell>
-                                </TableRow>
-                              </TableHead>
-                              <TableBody>
-                                {warehouseCompartments.map(compartment => {
-                                  const usage = calculateCompartmentUsage(compartment._id, compartment.capacity);
-                                  const compartmentItems = getCompartmentItems(compartment._id);
-                                  
-                                  return (
-                                    <TableRow key={compartment._id}>
-                                      <TableCell>{compartment.name}</TableCell>
-                                      <TableCell align="right">{compartment.capacity}</TableCell>
-                                      <TableCell align="right">${compartment.maintenancePrice?.toFixed(2) || '0.00'}</TableCell>
-                                      <TableCell align="right">
-                                        <Tooltip title={`${usage.used} of ${compartment.capacity} used`}>
-                                          <Chip 
-                                            size="small" 
-                                            label={`${usage.percentage}%`} 
-                                            color={usage.percentage > 90 ? "error" : usage.percentage > 70 ? "warning" : "success"} 
-                                            variant="outlined" 
-                                          />
-                                        </Tooltip>
-                                      </TableCell>
-                                      <TableCell align="right">
-                                        <Tooltip title="Edit">
-                                          <IconButton 
-                                            size="small" 
-                                            color="primary"
-                                            onClick={() => handleOpenCompartmentDialog('edit', compartment)}
-                                          >
-                                            <EditIcon fontSize="small" />
-                                          </IconButton>
-                                        </Tooltip>
-                                        <Tooltip title="Delete">
-                                          <IconButton 
-                                            size="small" 
-                                            color="error"
-                                            onClick={() => handleOpenCompartmentDialog('delete', compartment)}
-                                            disabled={compartmentItems.length > 0}
-                                          >
-                                            <DeleteIcon fontSize="small" />
-                                          </IconButton>
-                                        </Tooltip>
-                                      </TableCell>
-                                    </TableRow>
-                                  );
-                                })}
-                              </TableBody>
-                            </Table>
-                          </TableContainer>
-                        )}
-                        
-                        <Button
-                          startIcon={<AddIcon />}
-                          variant="outlined"
-                          size="small"
-                          onClick={() => {
-                            setCompartmentForm(prev => ({
-                              ...prev,
-                              warehouse_id: warehouse._id
-                            }));
-                            handleOpenCompartmentDialog('add');
-                          }}
-                        >
-                          Add Compartment
-                        </Button>
+                        <LinearProgress 
+                          variant="determinate" 
+                          value={usage.percentage} 
+                          color={usageColor}
+                          sx={{ height: 8, borderRadius: 4, mt: 0.5 }}
+                        />
                       </Box>
-                    </Paper>
-                  </Grid>
-                );
-              })}
-            </Grid>
-          )}
+                      
+                      <Box sx={{ mt: 2 }}>
+                        <Chip 
+                          size="small" 
+                          label={`${usage.items} items stored`}
+                          color="primary" 
+                          variant="outlined"
+                          sx={{ mr: 1 }}
+                        />
+                        <Chip 
+                          size="small" 
+                          label={`${usage.remaining} units free`}
+                          color={usage.remaining > 0 ? "success" : "error"}
+                          variant="outlined"
+                        />
+                      </Box>
+                    </CardContent>
+                  </Card>
+                </Grid>
+              );
+            })}
+          </Grid>
+        )}
+        
+        <Box sx={{ mt: 2 }}>
+          <Button
+            startIcon={<AddIcon />}
+            variant="outlined"
+            size="small"
+            onClick={() => {
+              setCompartmentForm(prev => ({
+                ...prev,
+                warehouse_id: warehouseId
+              }));
+              handleOpenCompartmentDialog('add');
+            }}
+          >
+            Add Compartment
+          </Button>
         </Box>
-      )}
-      
-      {/* Compartments Tab */}
-      {tabValue === 1 && (
-        <Box>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-            <Typography variant="h6">
-              All Compartments
-            </Typography>
-            <Button
-              variant="contained"
-              startIcon={<AddIcon />}
-              onClick={() => handleOpenCompartmentDialog('add')}
-            >
-              Add Compartment
-            </Button>
+      </>
+    );
+  };
+
+  // Render warehouses tab content
+  const renderWarehousesTabContent = () => {
+    return (
+      <Box>
+        {/* Search and Add Bar */}
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
+          <TextField
+            placeholder="Search warehouses..."
+            size="small"
+            value={searchQuery}
+            onChange={handleSearchChange}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon fontSize="small" />
+                </InputAdornment>
+              ),
+              endAdornment: searchQuery && (
+                <InputAdornment position="end">
+                  <IconButton size="small" onClick={handleClearSearch}>
+                    <ClearIcon fontSize="small" />
+                  </IconButton>
+                </InputAdornment>
+              )
+            }}
+            sx={{ width: 300 }}
+          />
+          <Button
+            variant="contained"
+            startIcon={<AddIcon />}
+            onClick={() => handleOpenWarehouseDialog('add')}
+          >
+            Add Warehouse
+          </Button>
+        </Box>
+        
+        {/* Warehouses List */}
+        {loadingWarehouses ? (
+          <Box sx={{ display: 'flex', justifyContent: 'center', my: 4 }}>
+            <CircularProgress />
           </Box>
-          
-          {/* Error message from context */}
-          {compartmentsError && (
-            <Alert severity="error" sx={{ mb: 2 }}>
-              {compartmentsError}
-            </Alert>
-          )}
-          
-          {/* Compartments list */}
-          {loadingCompartments ? (
+        ) : getFilteredWarehouses().length === 0 ? (
+          <Paper sx={{ p: 4, textAlign: 'center' }}>
+            <WarehouseIcon sx={{ fontSize: 60, color: 'text.secondary', mb: 2 }} />
+            <Typography variant="h6" color="text.secondary" gutterBottom>
+              No warehouses found
+            </Typography>
+            <Typography variant="body2" color="text.secondary" paragraph>
+              {searchQuery ? "No warehouses match your search. Try different terms." : "Start by adding your first warehouse."}
+            </Typography>
+            {!searchQuery && (
+              <Button
+                variant="contained"
+                startIcon={<AddIcon />}
+                onClick={() => handleOpenWarehouseDialog('add')}
+              >
+                Add Warehouse
+              </Button>
+            )}
+          </Paper>
+        ) : (
+          <Box>
+            {getFilteredWarehouses().map(warehouse => {
+              const warehouseCompartments = getWarehouseCompartments(warehouse._id);
+              const totalCapacity = warehouseCompartments.reduce((sum, comp) => sum + comp.capacity, 0);
+              const totalUsed = warehouseCompartments.reduce((sum, comp) => {
+                const usage = calculateCompartmentUsage(comp._id, comp.capacity);
+                return sum + usage.used;
+              }, 0);
+              const usagePercentage = totalCapacity > 0 ? 
+                Math.min(100, Math.round((totalUsed / totalCapacity) * 100)) : 0;
+              
+              return (
+                <Grid item xs={12} md={6} key={warehouse._id}>
+                  <Paper sx={{ p: 0, overflow: 'hidden' }}>
+                    <Box sx={{ 
+                      p: 2, 
+                      borderBottom: 1, 
+                      borderColor: 'divider',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center'
+                    }}>
+                      <Box>
+                        <Typography variant="h6">{warehouse.name}</Typography>
+                        <Typography variant="body2" color="text.secondary">
+                          {warehouse.location || 'No location specified'}
+                        </Typography>
+                      </Box>
+                      <Box>
+                        <Tooltip title="Edit">
+                          <IconButton 
+                            size="small" 
+                            color="primary"
+                            onClick={() => handleOpenWarehouseDialog('edit', warehouse)}
+                          >
+                            <EditIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title="Delete">
+                          <IconButton 
+                            size="small" 
+                            color="error"
+                            onClick={() => handleOpenWarehouseDialog('delete', warehouse)}
+                            disabled={warehouseCompartments.length > 0}
+                          >
+                            <DeleteIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      </Box>
+                    </Box>
+                    
+                    <Box sx={{ p: 2 }}>
+                      <Grid container spacing={2} sx={{ mb: 2 }}>
+                        <Grid item xs={4}>
+                          <Typography variant="body2" color="text.secondary">
+                            Compartments
+                          </Typography>
+                          <Typography variant="h6">
+                            {warehouseCompartments.length}
+                          </Typography>
+                        </Grid>
+                        <Grid item xs={4}>
+                          <Typography variant="body2" color="text.secondary">
+                            Total Capacity
+                          </Typography>
+                          <Typography variant="h6">
+                            {warehouse.capacity || 0}
+                          </Typography>
+                        </Grid>
+                        <Grid item xs={4}>
+                          <Typography variant="body2" color="text.secondary">
+                            Usage
+                          </Typography>
+                          <Typography variant="h6">
+                            {usagePercentage}%
+                          </Typography>
+                        </Grid>
+                      </Grid>
+                      
+                      <Box sx={{ mb: 2 }}>
+                        <Typography variant="body2" color="text.secondary" gutterBottom>
+                          Compartment Capacity: {totalCapacity} of {warehouse.capacity || 0} used
+                        </Typography>
+                        <LinearProgress 
+                          variant="determinate" 
+                          value={usagePercentage}
+                          color={usagePercentage > 90 ? "error" : usagePercentage > 70 ? "warning" : "success"}
+                          sx={{ height: 8, borderRadius: 4 }}
+                        />
+                      </Box>
+                      
+                      <Divider sx={{ my: 2 }} />
+                      
+                      <Typography variant="subtitle2" gutterBottom>
+                        Compartments
+                      </Typography>
+                      
+                      {renderWarehouseCompartments(warehouse._id)}
+                    </Box>
+                  </Paper>
+                </Grid>
+              );
+            })}
+          </Box>
+        )}
+      </Box>
+    );
+  };
+
+  return (
+    <Box sx={{ p: 3 }}>
+      <Typography variant="h4" gutterBottom>
+        Warehouse Management
+      </Typography>
+      
+      <Tabs value={tabValue} onChange={handleTabChange} sx={{ mb: 2 }}>
+        <Tab label="Warehouses" />
+        <Tab label="Compartments" />
+      </Tabs>
+      
+      {tabValue === 0 ? (
+        renderWarehousesTabContent()
+      ) : (
+        // Compartments tab content
+        <Box>
+          {loadingCompartments || loadingWarehouses ? (
             <Box sx={{ display: 'flex', justifyContent: 'center', my: 4 }}>
               <CircularProgress />
             </Box>
@@ -590,88 +663,39 @@ const Warehouses = () => {
               <Typography variant="h6" color="text.secondary" gutterBottom>
                 No compartments found
               </Typography>
-              <Typography variant="body2" color="text.secondary">
-                Add your first compartment to get started
+              <Typography variant="body2" color="text.secondary" paragraph>
+                Create a warehouse first, then add compartments to it.
               </Typography>
+              <Button
+                variant="contained"
+                startIcon={<AddIcon />}
+                onClick={() => handleOpenWarehouseDialog('add')}
+                disabled={warehouses.length === 0}
+              >
+                {warehouses.length === 0 ? 'Create Warehouse First' : 'Add Warehouse'}
+              </Button>
             </Paper>
           ) : (
-            <TableContainer component={Paper}>
-              <Table>
-                <TableHead>
-                  <TableRow>
-                    <TableCell>Name</TableCell>
-                    <TableCell>Warehouse</TableCell>
-                    <TableCell align="right">Capacity</TableCell>
-                    <TableCell align="right">Usage</TableCell>
-                    <TableCell align="right">Maintenance Price</TableCell>
-                    <TableCell align="right">Items Stored</TableCell>
-                    <TableCell align="right">Actions</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {compartments.map(compartment => {
-                    const warehouse = warehouses.find(w => w._id === compartment.warehouse_id);
-                    const usage = calculateCompartmentUsage(compartment._id, compartment.capacity);
-                    const compartmentItems = getCompartmentItems(compartment._id);
-                    
-                    return (
-                      <TableRow key={compartment._id}>
-                        <TableCell>{compartment.name}</TableCell>
-                        <TableCell>
-                          {warehouse ? (
-                            warehouse.name
-                          ) : (
-                            <Typography variant="body2" color="error">
-                              No warehouse assigned
-                            </Typography>
-                          )}
-                        </TableCell>
-                        <TableCell align="right">{compartment.capacity}</TableCell>
-                        <TableCell align="right">
-                          <Tooltip title={`${usage.used} of ${compartment.capacity} used`}>
-                            <Chip 
-                              size="small" 
-                              label={`${usage.percentage}%`} 
-                              color={usage.percentage > 90 ? "error" : usage.percentage > 70 ? "warning" : "success"} 
-                              variant="outlined" 
-                            />
-                          </Tooltip>
-                        </TableCell>
-                        <TableCell align="right">${compartment.maintenancePrice?.toFixed(2) || '0.00'}</TableCell>
-                        <TableCell align="right">{compartmentItems.length}</TableCell>
-                        <TableCell align="right">
-                          <Tooltip title="Edit">
-                            <IconButton 
-                              size="small" 
-                              color="primary"
-                              onClick={() => handleOpenCompartmentDialog('edit', compartment)}
-                            >
-                              <EditIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                          <Tooltip title="Delete">
-                            <IconButton 
-                              size="small" 
-                              color="error"
-                              onClick={() => handleOpenCompartmentDialog('delete', compartment)}
-                              disabled={compartmentItems.length > 0}
-                            >
-                              <DeleteIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </TableContainer>
+            <Grid container spacing={2}>
+              {warehouses.map(warehouse => (
+                <Grid item xs={12} key={warehouse._id}>
+                  <Accordion defaultExpanded>
+                    <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                      <Typography variant="h6">{warehouse.name} Compartments</Typography>
+                    </AccordionSummary>
+                    <AccordionDetails>
+                      {renderWarehouseCompartments(warehouse._id)}
+                    </AccordionDetails>
+                  </Accordion>
+                </Grid>
+              ))}
+            </Grid>
           )}
         </Box>
       )}
       
-      {/* Warehouse Dialog */}
-      <Dialog open={openWarehouseDialog} onClose={handleCloseWarehouseDialog} maxWidth="sm" fullWidth>
+      {/* Dialogs for warehouse operations */}
+      <Dialog open={openWarehouseDialog} onClose={handleCloseWarehouseDialog}>
         <DialogTitle>
           {warehouseDialogType === 'add' ? 'Add Warehouse' : 
            warehouseDialogType === 'edit' ? 'Edit Warehouse' : 'Delete Warehouse'}
@@ -752,8 +776,8 @@ const Warehouses = () => {
         </DialogActions>
       </Dialog>
       
-      {/* Compartment Dialog */}
-      <Dialog open={openCompartmentDialog} onClose={handleCloseCompartmentDialog} maxWidth="sm" fullWidth>
+      {/* Dialogs for compartment operations */}
+      <Dialog open={openCompartmentDialog} onClose={handleCloseCompartmentDialog}>
         <DialogTitle>
           {compartmentDialogType === 'add' ? 'Add Compartment' : 
            compartmentDialogType === 'edit' ? 'Edit Compartment' : 'Delete Compartment'}

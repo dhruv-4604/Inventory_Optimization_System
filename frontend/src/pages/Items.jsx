@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Box,
@@ -37,7 +37,9 @@ import {
   Divider,
   Card,
   CardContent,
-  Snackbar
+  Snackbar,
+  LinearProgress,
+  FormHelperText
 } from '@mui/material';
 import {
   Add as AddIcon,
@@ -51,11 +53,14 @@ import {
   Save as SaveIcon,
   AutoFixHigh as OptimizeIcon,
   NavigateNext as NextIcon,
-  ArrowBack as BackIcon
+  ArrowBack as BackIcon,
+  Sort as SortIcon
 } from '@mui/icons-material';
 
 import { useData } from '../contexts/DataContext';
 import { optimizationAPI } from '../api';
+import { binarySearch } from '../utils/binarySearch';
+import { insertionSort } from '../utils/insertionSort';
 
 const Items = () => {
   const location = useLocation();
@@ -82,7 +87,8 @@ const Items = () => {
     sellingPrice: 0,
     size: 1,
     restockPoint: 0,
-    warehouse_id: ''
+    warehouse_id: '',
+    category: ''
   });
 
   // Batch add state
@@ -97,6 +103,12 @@ const Items = () => {
     open: false,
     message: '',
     severity: 'info'
+  });
+
+  // Add this with the other state declarations at the top of the component
+  const [sortConfig, setSortConfig] = useState({
+    field: 'name',
+    ascending: true
   });
 
   // Get data from context
@@ -129,12 +141,13 @@ const Items = () => {
       setItemForm({
         name: '',
         description: '',
-        quantity: 0,
-        cost: 0,
-        sellingPrice: 0,
+        quantity: 1,
+        cost: 1,
+        sellingPrice: 1,
         size: 1,
-        restockPoint: 0,
-        warehouse_id: ''
+        restockPoint: 5,
+        warehouse_id: warehouses.length > 0 ? warehouses[0]._id : '',
+        category: ''
       });
     } else if (item && (type === 'edit' || type === 'delete')) {
       setCurrentItem(item);
@@ -149,7 +162,8 @@ const Items = () => {
           size: item.size,
           restockPoint: item.restockPoint,
           warehouse_id: item.warehouse_id || '',
-          compartment_id: item.compartment_id || ''
+          compartment_id: item.compartment_id || '',
+          category: item.category || ''
         });
       }
     } else {
@@ -162,7 +176,8 @@ const Items = () => {
         sellingPrice: 0,
         size: 1,
         restockPoint: 0,
-        warehouse_id: ''
+        warehouse_id: '',
+        category: ''
       });
     }
     
@@ -246,115 +261,109 @@ const Items = () => {
   };
 
   const handleSubmit = async () => {
-    // For deletion, just confirm and delete
-    if (dialogType === 'delete' && currentItem) {
-      try {
-        await deleteItem(currentItem._id);
-        handleCloseDialog();
-      } catch (error) {
-        console.error('Delete operation failed:', error);
-        return;
-      }
-    }
-
-    // For 'batch' type, bypass strict validation since we're just adding to the batch
-    if (dialogType !== 'batch') {
-      const errors = validateForm(itemForm);
-      setFormErrors(errors);
-      if (Object.keys(errors).length > 0) {
-        console.log("Validation errors:", errors);
-        return; // Stop if validation fails for add/edit
-      }
-    } else if (dialogType === 'batch') {
-      // Only validate required fields for batch
-      const errors = {};
-      if (!itemForm.name.trim()) errors.name = 'Name is required';
+    // Use different validation for batch mode vs regular mode
+    let errors = {};
+    
+    if (dialogType === 'batch') {
+      // Simplified validation for batch items
+      if (!itemForm.name) errors.name = 'Name is required';
+      if (itemForm.sellingPrice <= 0) errors.sellingPrice = 'Selling price must be greater than 0';
+      if (itemForm.cost <= 0) errors.cost = 'Cost must be greater than 0';
       if (itemForm.size <= 0) errors.size = 'Size must be greater than 0';
       if (itemForm.quantity <= 0) errors.quantity = 'Quantity must be greater than 0';
-      
+      // Warehouse is required but we'll check it separately to provide a clear error message
+      if (!itemForm.warehouse_id) errors.warehouse_id = 'Warehouse is required';
+    } else {
+      // Full validation for regular add/edit
+      errors = validateForm(itemForm);
+    }
+    
+    if (Object.keys(errors).length > 0) {
       setFormErrors(errors);
-      if (Object.keys(errors).length > 0) {
-        console.log("Batch validation errors:", errors);
-        return;
-      }
+      return;
     }
 
-    // Special validation for compartment capacity
-    if (dialogType === 'add' || dialogType === 'edit') {
-      // If compartment is selected, check size
-      if (itemForm.compartment_id && itemForm.size && itemForm.quantity) {
-        const selectedCompartment = compartments.find(c => c._id === itemForm.compartment_id);
-        if (selectedCompartment) {
-          const totalItemSize = itemForm.size * itemForm.quantity;
-          const availableCapacity = selectedCompartment.remainingCapacity !== undefined ? 
-            selectedCompartment.remainingCapacity : selectedCompartment.capacity;
-          
-          if (totalItemSize > availableCapacity) {
-            console.log("Capacity validation failed:", {
-              totalSize: totalItemSize,
-              availableCapacity,
-              compartment: selectedCompartment
-            });
-            
-            setSnackbar({
-              open: true,
-              message: `Total size (${totalItemSize}) exceeds compartment's available capacity (${availableCapacity})`,
-              severity: 'error'
-            });
-            setFormErrors({
-              ...formErrors,
-              size: `Total size (${totalItemSize}) exceeds compartment's available capacity (${availableCapacity})`,
-              quantity: 'Reduce quantity or size to fit in compartment'
-            });
-            return;
-          }
-        }
-      }
-    }
-
-    // Handle batch add, regular add, or edit operations
     try {
-      console.log(`Submitting form for ${dialogType}:`, itemForm);
-      
-      if (dialogType === 'add') {
-        // Map cost to buyingPrice for the backend
-        const itemData = {
-          ...itemForm,
-          buyingPrice: itemForm.cost,
-          compartment_id: itemForm.compartment_id || undefined
-        };
-        await createItem(itemData);
-        handleCloseDialog();
-      } else if (dialogType === 'edit' && currentItem) {
-        // Map cost to buyingPrice for the backend
-        const itemData = {
-          ...itemForm,
-          buyingPrice: itemForm.cost,
-          compartment_id: itemForm.compartment_id || undefined
-        };
-        console.log("Updating item with data:", itemData);
-        await updateItem(currentItem._id, itemData);
-        handleCloseDialog();
-      } else if (dialogType === 'batch') {
-        // Add current item to batch and reset form
-        const newBatchItem = { 
-          ...itemForm, 
-          id: Date.now(),
-          buyingPrice: itemForm.cost 
-        };
-        console.log("Adding item to batch:", newBatchItem);
-        setBatchItems(prev => [...prev, newBatchItem]);
+      // Prepare form data for API
+      const formData = {
+        ...itemForm,
+        buyingPrice: itemForm.cost, // Ensure backward compatibility
+        // Ensure numbers are passed as numbers, not strings
+        quantity: Number(itemForm.quantity),
+        cost: Number(itemForm.cost),
+        sellingPrice: Number(itemForm.sellingPrice),
+        size: Number(itemForm.size),
+        restockPoint: Number(itemForm.restockPoint)
+      };
+
+      // Handle the batch add case specifically
+      if (dialogType === 'batch') {
+        // Generate a temporary id for the batch item
+        const tempId = `temp-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+        
+        // Add the new item to the batch
+        setBatchItems([
+          ...batchItems,
+          {
+            id: tempId,
+            ...formData
+          }
+        ]);
+        
+        // Reset only certain fields to make adding multiple items easier
         setItemForm({
           ...itemForm,
           name: '',
-          description: ''
+          description: '',
+          quantity: 1
+        });
+        
+        // Clear errors after successful add
+        setFormErrors({});
+        
+        // Show success message
+        setSnackbar({
+          open: true,
+          message: 'Item added to batch!',
+          severity: 'success'
+        });
+        
+        return; // Exit early since we're just adding to batch
+      }
+
+      if (dialogType === 'add') {
+        await createItem(formData);
+        setSnackbar({
+          open: true,
+          message: 'Item added successfully!',
+          severity: 'success'
+        });
+      } else if (dialogType === 'edit') {
+        await updateItem(currentItem._id, formData);
+        setSnackbar({
+          open: true,
+          message: 'Item updated successfully!',
+          severity: 'success'
+        });
+      } else if (dialogType === 'delete') {
+        await deleteItem(currentItem._id);
+        setSnackbar({
+          open: true,
+          message: 'Item deleted successfully!',
+          severity: 'success'
         });
       }
+
+      // Close dialog and reset form
+      handleCloseDialog();
+      
+      // Refresh items data
+      fetchItems();
     } catch (error) {
-      console.error('Form submission failed:', error);
+      console.error('Error handling item:', error);
       setSnackbar({
         open: true,
-        message: `Failed to ${dialogType} item: ${error.message}`,
+        message: `Error: ${error.message || 'Something went wrong'}`,
         severity: 'error'
       });
     }
@@ -663,20 +672,56 @@ const Items = () => {
     navigate('/items', { replace: true });
   };
 
-  // Filter items based on search, low stock, and pending storage filters
-  const filteredItems = items.filter(item => {
-    const matchesSearch = searchQuery === '' || 
-      item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (item.description && item.description.toLowerCase().includes(searchQuery.toLowerCase()));
+  // Get filtered items based on search and filters
+  const getFilteredItems = () => {
+    let filteredItems = [...items];
     
-    const matchesLowStock = !filterLowStock || 
-      (item.quantity <= item.restockPoint);
+    // Apply binary search for search query
+    if (searchQuery) {
+      filteredItems = binarySearch(filteredItems, searchQuery, 'name');
+    }
     
-    const matchesPendingStorage = !filterPendingStorage ||
-      !item.compartment_id;
+    // Apply filters
+    if (filterLowStock) {
+      filteredItems = filteredItems.filter(item => item.quantity <= item.restockPoint);
+    }
     
-    return matchesSearch && matchesLowStock && matchesPendingStorage;
-  });
+    if (filterPendingStorage) {
+      filteredItems = filteredItems.filter(item => !item.compartment_id);
+    }
+    
+    // Apply sorting using insertion sort
+    return insertionSort(filteredItems, sortConfig.field, sortConfig.ascending);
+  };
+  
+  // Sort handler
+  const handleSort = (field) => {
+    setSortConfig(prevConfig => ({
+      field,
+      ascending: prevConfig.field === field ? !prevConfig.ascending : true
+    }));
+  };
+
+  // Get compartment remaining capacity
+  const getCompartmentRemainingSpace = (compartmentId) => {
+    if (!compartmentId) return null;
+    
+    const compartment = compartments.find(comp => comp._id === compartmentId);
+    if (!compartment) return null;
+    
+    // Calculate used space by summing up item sizes
+    const usedSpace = items
+      .filter(item => item.compartment_id === compartmentId)
+      .reduce((total, item) => total + (item.size * item.quantity), 0);
+    
+    const remainingSpace = compartment.capacity - usedSpace;
+    return {
+      total: compartment.capacity,
+      used: usedSpace,
+      remaining: remainingSpace,
+      percentUsed: Math.round((usedSpace / compartment.capacity) * 100)
+    };
+  };
 
   // Step labels for the batch add workflow
   const steps = ['Add Items', 'Storage Optimization'];
@@ -823,7 +868,7 @@ const Items = () => {
         <Box sx={{ display: 'flex', justifyContent: 'center', my: 4 }}>
           <CircularProgress />
         </Box>
-      ) : filteredItems.length === 0 ? (
+      ) : getFilteredItems().length === 0 ? (
         <Paper sx={{ p: 4, textAlign: 'center' }}>
           <InventoryIcon sx={{ fontSize: 60, color: 'text.secondary', mb: 2 }} />
           <Typography variant="h6" color="text.secondary" gutterBottom>
@@ -836,104 +881,92 @@ const Items = () => {
           </Typography>
         </Paper>
       ) : (
-        <TableContainer component={Paper}>
+        <TableContainer component={Paper} sx={{ mt: 2 }}>
           <Table>
             <TableHead>
               <TableRow>
-                <TableCell>Name</TableCell>
-                <TableCell>Description</TableCell>
-                <TableCell align="right">Quantity</TableCell>
-                <TableCell align="right">Cost</TableCell>
-                <TableCell align="right">Selling Price</TableCell>
-                <TableCell align="right">Size</TableCell>
-                <TableCell>Storage Status</TableCell>
-                <TableCell align="right">Maintenance Cost</TableCell>
-                <TableCell align="right">Actions</TableCell>
+                <TableCell>
+                  <Box sx={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }} 
+                       onClick={() => handleSort('name')}>
+                    Name
+                    {sortConfig.field === 'name' && (
+                      <SortIcon sx={{ fontSize: 18, ml: 0.5, transform: sortConfig.ascending ? 'none' : 'rotate(180deg)' }} />
+                    )}
+                  </Box>
+                </TableCell>
+                <TableCell>
+                  <Box sx={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }} 
+                       onClick={() => handleSort('quantity')}>
+                    Quantity
+                    {sortConfig.field === 'quantity' && (
+                      <SortIcon sx={{ fontSize: 18, ml: 0.5, transform: sortConfig.ascending ? 'none' : 'rotate(180deg)' }} />
+                    )}
+                  </Box>
+                </TableCell>
+                <TableCell>
+                  <Box sx={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }} 
+                       onClick={() => handleSort('sellingPrice')}>
+                    Price
+                    {sortConfig.field === 'sellingPrice' && (
+                      <SortIcon sx={{ fontSize: 18, ml: 0.5, transform: sortConfig.ascending ? 'none' : 'rotate(180deg)' }} />
+                    )}
+                  </Box>
+                </TableCell>
+                <TableCell>
+                  <Box sx={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }} 
+                       onClick={() => handleSort('cost')}>
+                    Cost
+                    {sortConfig.field === 'cost' && (
+                      <SortIcon sx={{ fontSize: 18, ml: 0.5, transform: sortConfig.ascending ? 'none' : 'rotate(180deg)' }} />
+                    )}
+                  </Box>
+                </TableCell>
+                <TableCell>Warehouse</TableCell>
+                <TableCell>Compartment</TableCell>
+                <TableCell>Storage</TableCell>
+                <TableCell>Actions</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
-              {filteredItems.map((item) => {
-                const compartment = compartments.find(c => c._id === item.compartment_id);
+              {getFilteredItems().map((item) => {
                 const warehouse = warehouses.find(w => w._id === item.warehouse_id);
-                const isLowStock = item.quantity <= item.restockPoint;
-                const isPendingStorage = !item.compartment_id;
+                const compartment = compartments.find(c => c._id === item.compartment_id);
+                const storage = getCompartmentRemainingSpace(item.compartment_id);
                 
                 return (
                   <TableRow key={item._id}>
                     <TableCell>{item.name}</TableCell>
-                    <TableCell>{item.description || '-'}</TableCell>
-                    <TableCell align="right">
-                      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
-                        {isLowStock && (
-                          <Tooltip title="Below restock point">
-                            <WarningIcon color="warning" fontSize="small" sx={{ mr: 1 }} />
-                          </Tooltip>
-                        )}
-                        {item.quantity}
-                      </Box>
-                    </TableCell>
-                    <TableCell align="right">
-                      ${item.cost !== undefined ? item.cost.toFixed(2) : 
-                        (item.buyingPrice !== undefined ? item.buyingPrice.toFixed(2) : '0.00')}
-                    </TableCell>
-                    <TableCell align="right">
-                      ${item.sellingPrice !== undefined ? item.sellingPrice.toFixed(2) : '0.00'}
-                    </TableCell>
-                    <TableCell align="right">{item.size}</TableCell>
                     <TableCell>
-                      {isPendingStorage ? (
-                        <Chip 
-                          size="small" 
-                          label="Pending Storage" 
-                          color="secondary" 
-                          variant="outlined" 
-                        />
-                      ) : compartment ? (
-                        <Tooltip title={`Warehouse: ${warehouse?.name || 'Unknown'}`}>
-                          <Chip 
-                            size="small" 
-                            label={compartment.name} 
-                            color="primary" 
-                            variant="outlined" 
-                          />
+                      {item.quantity} {item.quantity <= item.restockPoint && (
+                        <Tooltip title="Low stock">
+                          <WarningIcon color="warning" fontSize="small" />
                         </Tooltip>
-                      ) : (
-                        <Chip 
-                          size="small" 
-                          label="Unassigned" 
-                          color="default" 
-                          variant="outlined" 
-                        />
                       )}
                     </TableCell>
-                    <TableCell align="right">
-                      {compartment ? (
-                        <Tooltip title="Daily maintenance cost">
-                          ${compartment.maintenancePrice !== undefined ? compartment.maintenancePrice.toFixed(2) : '0.00'}
+                    <TableCell>${item.sellingPrice.toFixed(2)}</TableCell>
+                    <TableCell>${(item.cost || item.buyingPrice).toFixed(2)}</TableCell>
+                    <TableCell>{warehouse ? warehouse.name : 'None'}</TableCell>
+                    <TableCell>{compartment ? compartment.name : 'None'}</TableCell>
+                    <TableCell>
+                      {storage ? (
+                        <Tooltip title={`${storage.used}/${storage.total} (${storage.remaining} remaining)`}>
+                          <Box sx={{ width: '100%' }}>
+                            <LinearProgress 
+                              variant="determinate" 
+                              value={storage.percentUsed} 
+                              color={storage.percentUsed > 90 ? "error" : storage.percentUsed > 70 ? "warning" : "primary"}
+                            />
+                          </Box>
                         </Tooltip>
-                      ) : (
-                        '-'
-                      )}
+                      ) : 'N/A'}
                     </TableCell>
-                    <TableCell align="right">
-                      <Tooltip title="Edit">
-                        <IconButton 
-                          size="small" 
-                          color="primary"
-                          onClick={() => handleOpenDialog('edit', item)}
-                        >
-                          <EditIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                      <Tooltip title="Delete">
-                        <IconButton 
-                          size="small" 
-                          color="error"
-                          onClick={() => handleOpenDialog('delete', item)}
-                        >
-                          <DeleteIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
+                    <TableCell>
+                      <IconButton color="primary" onClick={() => handleOpenDialog('edit', item)}>
+                        <EditIcon />
+                      </IconButton>
+                      <IconButton color="error" onClick={() => handleOpenDialog('delete', item)}>
+                        <DeleteIcon />
+                      </IconButton>
                     </TableCell>
                   </TableRow>
                 );

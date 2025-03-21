@@ -97,6 +97,9 @@ export const optimizationAPI = {
   applyAssignments: (data) => api.post('/optimization/apply-assignments', data),
   assignTempItems: (data) => api.post('/optimization/assign-temp-items', data),
   getRestockRecommendations: (data) => api.post('/optimization/restock', data),
+  optimizeRestock: (budget) => api.post('/optimization/restock', { 
+    budget: typeof budget === 'object' ? budget.budget : budget 
+  }),
 };
 
 export default api; 

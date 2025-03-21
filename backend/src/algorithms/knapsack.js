@@ -61,35 +61,28 @@ function knapsackStorage(items, capacity, valueProperty = 'value', sizeProperty 
 }
 
 /**
- * Optimizes storage of items in compartments using a heuristic algorithm
+ * Optimizes storage of items in compartments using a greedy algorithm
  * @param {Array} items - Array of items with id, name, size, quantity and warehouse_id
  * @param {Array} compartments - Array of compartments with id, name, capacity, warehouse_id, and remainingCapacity
- * @param {Boolean} considerMaintenance - Whether to consider maintenance costs
  * @returns {Object} Assignment result with compartmentAssignments and unassignedItems
  */
-function optimizeStorage(items, compartments, considerMaintenance = false) {
+function optimizeStorage(items, compartments) {
   // Create copies to avoid modifying original arrays
-  const itemsToAssign = [...items].map(item => {
-    // Ensure we have string IDs and calculate totalSize
-    return {
-      ...item,
-      _id: item._id?.toString() || item._id,
-      warehouse_id: item.warehouse_id?.toString() || null,
-      totalSize: item.size * (item.quantity || 1)
-    };
-  });
+  const itemsToAssign = [...items].map(item => ({
+    ...item,
+    _id: item._id?.toString() || item._id,
+    warehouse_id: item.warehouse_id?.toString() || null,
+    totalSize: item.size * (item.quantity || 1)
+  }));
   
-  const availableCompartments = [...compartments].map(comp => {
-    // Ensure we have string IDs and correct remaining space
-    return {
-      ...comp,
-      _id: comp._id?.toString() || comp._id,
-      warehouse_id: comp.warehouse_id?.toString() || null,
-      remainingSpace: comp.remainingCapacity !== undefined 
-        ? comp.remainingCapacity 
-        : comp.capacity
-    };
-  });
+  const availableCompartments = [...compartments].map(comp => ({
+    ...comp,
+    _id: comp._id?.toString() || comp._id,
+    warehouse_id: comp.warehouse_id?.toString() || null,
+    remainingSpace: comp.remainingCapacity !== undefined 
+      ? comp.remainingCapacity 
+      : comp.capacity
+  }));
 
   // Sort compartments by maintenance price (lowest first)
   availableCompartments.sort((a, b) => (a.maintenancePrice || 0) - (b.maintenancePrice || 0));
@@ -112,8 +105,7 @@ function optimizeStorage(items, compartments, considerMaintenance = false) {
     // Try each compartment in sorted order (by maintenance cost)
     for (const compartment of availableCompartments) {
       // Compare warehouse IDs as strings
-      const sameWarehouse = 
-        (item.warehouse_id || '') === (compartment.warehouse_id || '');
+      const sameWarehouse = (item.warehouse_id || '') === (compartment.warehouse_id || '');
       
       // Check both warehouse match and capacity
       if (sameWarehouse && compartment.remainingSpace >= item.totalSize) {
@@ -146,24 +138,53 @@ function optimizeStorage(items, compartments, considerMaintenance = false) {
  * @returns {Object} Result with items to restock and quantities
  */
 function optimizeRestock(items, budget) {
+  // Ensure budget is a positive number
+  budget = Math.max(0, Number(budget) || 0);
+  
+  if (budget <= 0) {
+    return {
+      itemsToRestock: [],
+      totalCost: 0,
+      remainingBudget: 0
+    };
+  }
+  
   // Prepare items with extended metadata for knapsack
   const itemsWithMetadata = items.map(item => {
-    // Calculate profit per item
-    const profit = item.sellingPrice - item.buyingPrice;
+    // Make sure necessary properties exist and are valid numbers
+    const sellingPrice = Number(item.sellingPrice) || 0;
+    const buyingPrice = Number(item.buyingPrice || item.cost) || 0;
+    const quantity = Number(item.quantity) || 0;
+    const restockPoint = Number(item.restockPoint) || 0;
     
-    // Factor in popularity/demand rate if available
-    const popularity = item.salesRate || 1; // Default to 1 if no sales data
+    // Skip items with invalid pricing
+    if (sellingPrice <= 0 || buyingPrice <= 0) {
+      return null;
+    }
+    
+    // Calculate profit per item
+    const profit = sellingPrice - buyingPrice;
+    
+    // Only positive profit makes sense for restocking
+    if (profit <= 0) {
+      return null;
+    }
     
     // Calculate how many units we need to restock
-    const maxQuantity = Math.max(0, item.restockPoint - item.quantity);
+    const maxQuantity = Math.max(0, restockPoint - quantity);
+    
+    // Skip if no restocking needed
+    if (maxQuantity <= 0) {
+      return null;
+    }
     
     // Calculate the total cost to fully restock this item
-    const totalCost = maxQuantity * item.buyingPrice;
+    const totalCost = maxQuantity * buyingPrice;
     
     // Calculate the potential total profit from restocking
-    const totalProfit = maxQuantity * profit * popularity;
+    const totalProfit = maxQuantity * profit;
     
-    // Calculate profit ratio (profit per cost unit)
+    // Calculate profit ratio (profit per cost unit) for efficiency
     const profitRatio = totalCost > 0 ? totalProfit / totalCost : 0;
     
     return {
@@ -176,7 +197,7 @@ function optimizeRestock(items, budget) {
       value: totalProfit,
       size: totalCost 
     };
-  }).filter(item => item.maxQuantity > 0); // Only consider items that need restocking
+  }).filter(item => item !== null); // Filter out invalid items
   
   if (itemsWithMetadata.length === 0) {
     return {
@@ -186,54 +207,11 @@ function optimizeRestock(items, budget) {
     };
   }
   
-  // If we have more than one quantity per item, we need to split into individual units
-  // for the knapsack algorithm
-  let knapsackItems = [];
-  let itemIndices = new Map(); // Keep track of which items are represented at which indices
-  
-  // We have two approaches:
-  // 1. For a small number of items with small quantities, we can represent each quantity as a separate item
-  // 2. For larger problems, we use binary representation of quantities (powers of 2)
-  
-  const totalUnits = itemsWithMetadata.reduce((acc, item) => acc + item.maxQuantity, 0);
-  
-  if (totalUnits <= 1000) { // Use approach 1 for smaller problems
-    // Create individual items for each quantity
-    itemsWithMetadata.forEach((item, itemIndex) => {
-      for (let i = 0; i < item.maxQuantity; i++) {
-        knapsackItems.push({
-          originalItemIndex: itemIndex,
-          value: item.profit * (item.popularity || 1), // Value of adding 1 unit
-          size: item.buyingPrice // Cost of adding 1 unit
-        });
-      }
-    });
-  } else { // Use approach 2 for larger problems (binary representation)
-    itemsWithMetadata.forEach((item, itemIndex) => {
-      // Break quantity into powers of 2
-      let remaining = item.maxQuantity;
-      let binaryDigit = 1;
-      
-      while (remaining > 0) {
-        const units = Math.min(binaryDigit, remaining);
-        const unitCost = units * item.buyingPrice;
-        const unitProfit = units * item.profit * (item.popularity || 1);
-        
-        knapsackItems.push({
-          originalItemIndex: itemIndex,
-          units,
-          value: unitProfit,
-          size: unitCost
-        });
-        
-        remaining -= units;
-        binaryDigit *= 2;
-      }
-    });
-  }
+  // Sort by profit ratio for greedy approach fallback
+  itemsWithMetadata.sort((a, b) => b.profitRatio - a.profitRatio);
   
   // Run knapsack to find the optimal allocation
-  const knapsackResult = knapsackStorage(knapsackItems, budget, 'value', 'size');
+  const knapsackResult = knapsackStorage(itemsWithMetadata, budget, 'value', 'size');
   
   // Process the results
   const result = {
@@ -242,36 +220,28 @@ function optimizeRestock(items, budget) {
     remainingBudget: budget
   };
   
-  // Count how many units of each item were selected
-  const selectedCounts = new Map();
-  
-  knapsackResult.selectedItems.forEach(selection => {
-    const { originalItemIndex, units = 1 } = selection;
-    const currentCount = selectedCounts.get(originalItemIndex) || 0;
-    selectedCounts.set(originalItemIndex, currentCount + units);
-  });
-  
-  // Create the final restock recommendations
-  selectedCounts.forEach((count, itemIndex) => {
-    const originalItem = itemsWithMetadata[itemIndex];
-    const cost = count * originalItem.buyingPrice;
+  // Calculate the quantity to restock for each selected item
+  knapsackResult.selectedItems.forEach(item => {
+    const buyingPrice = Number(item.buyingPrice || item.cost) || 0;
+    const sellingPrice = Number(item.sellingPrice) || 0;
+    const profit = sellingPrice - buyingPrice;
     
     result.itemsToRestock.push({
-      item: originalItem._id,
-      name: originalItem.name,
-      quantity: count,
-      cost: cost,
-      expectedProfit: count * (originalItem.sellingPrice - originalItem.buyingPrice) * 
-                      (originalItem.popularity || 1)
+      _id: item._id,
+      name: item.name,
+      quantity: item.maxQuantity,
+      cost: item.totalCost,
+      expectedProfit: item.maxQuantity * profit,
+      unitCost: buyingPrice,
+      unitProfit: profit
     });
     
-    result.totalCost += cost;
+    result.totalCost += item.totalCost;
   });
   
   result.remainingBudget = budget - result.totalCost;
-  
-  // Sort by highest expected profit
-  result.itemsToRestock.sort((a, b) => b.expectedProfit - a.expectedProfit);
+  result.totalProfit = result.itemsToRestock.reduce((sum, item) => sum + item.expectedProfit, 0);
+  result.roi = result.totalCost > 0 ? (result.totalProfit / result.totalCost) * 100 : 0;
   
   return result;
 }

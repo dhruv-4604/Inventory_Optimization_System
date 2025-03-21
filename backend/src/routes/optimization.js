@@ -3,7 +3,7 @@ const {
   optimizeItemStorage,
   optimizeCompartmentAssignment,
   applyCompartmentAssignments,
-  optimizeRestock,
+  getRestockRecommendations,
   optimizeTempItemsAssignment
 } = require('../controllers/optimization');
 const { protect } = require('../middleware/auth');
@@ -17,6 +17,6 @@ router.post('/storage', optimizeItemStorage);
 router.post('/assign-compartments', optimizeCompartmentAssignment);
 router.post('/assign-temp-items', optimizeTempItemsAssignment);
 router.post('/apply-assignments', applyCompartmentAssignments);
-router.post('/restock', optimizeRestock);
+router.post('/restock', getRestockRecommendations);
 
 module.exports = router; 

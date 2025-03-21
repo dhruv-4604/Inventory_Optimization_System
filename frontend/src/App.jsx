@@ -14,10 +14,10 @@ import Layout from './components/Layout';
 import Dashboard from './pages/Dashboard';
 import Login from './pages/Login';
 import Register from './pages/Register';
-import Optimization from './pages/Optimization';
+import Restock from './pages/Restock';
 import Items from './pages/Items';
 import Warehouses from './pages/Warehouses';
-import RestockRecommendations from './pages/RestockRecommendations';
+import Optimization from './pages/Optimization';
 
 // Auth Guard
 const ProtectedRoute = ({ children }) => {
@@ -68,10 +68,10 @@ function App() {
               </ProtectedRoute>
             }>
               <Route index element={<Dashboard />} />
+              <Route path="restock" element={<Restock />} />
               <Route path="optimization" element={<Optimization />} />
               <Route path="items" element={<Items />} />
               <Route path="warehouses" element={<Warehouses />} />
-              <Route path="restock" element={<RestockRecommendations />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Route>
           </Routes>

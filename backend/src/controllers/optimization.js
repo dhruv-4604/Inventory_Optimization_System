@@ -241,10 +241,11 @@ exports.applyCompartmentAssignments = async (req, res) => {
     // Debug: log the incoming request
     console.log('Request body received:', req.body);
     
-    const { assignments } = req.body;
+    const { assignments, items: updatedItems } = req.body;
     
     console.log('Assignments received:', assignments);
     console.log('Assignments type:', typeof assignments);
+    console.log('Updated items received:', updatedItems);
     
     if (!assignments) {
       return res.status(400).json({
@@ -277,23 +278,54 @@ exports.applyCompartmentAssignments = async (req, res) => {
           continue;
         }
 
-        // Get compartment and check capacity
-        const compartment = await Compartment.findById(compartmentId);
-        if (!compartment) {
-          results.failed.push({ itemId, reason: 'Compartment not found' });
-          continue;
+        // If there's an updated version of this item in the request, use those values
+        const updatedItem = updatedItems ? updatedItems.find(i => i._id === itemId) : null;
+        if (updatedItem) {
+          console.log(`Updating item ${itemId} with new values:`, updatedItem);
+          // Update item fields from the updatedItem
+          if (updatedItem.quantity !== undefined) {
+            item.quantity = updatedItem.quantity;
+          }
+          if (updatedItem.size !== undefined) {
+            item.size = updatedItem.size;
+          }
+          if (updatedItem.name !== undefined) {
+            item.name = updatedItem.name;
+          }
+          if (updatedItem.description !== undefined) {
+            item.description = updatedItem.description;
+          }
+          if (updatedItem.sellingPrice !== undefined) {
+            item.sellingPrice = updatedItem.sellingPrice;
+          }
+          if (updatedItem.buyingPrice !== undefined) {
+            item.buyingPrice = updatedItem.buyingPrice;
+          }
+          if (updatedItem.restockPoint !== undefined) {
+            item.restockPoint = updatedItem.restockPoint;
+          }
         }
 
-        // Calculate total size needed
-        const totalSize = item.size * item.quantity;
-          
-        // Check if total size fits in compartment remaining capacity
-        if (totalSize > compartment.remainingCapacity) {
-          results.failed.push({ 
-            itemId, 
-            reason: `Total item size (${totalSize}) exceeds compartment remaining capacity (${compartment.remainingCapacity})` 
-          });
-          continue;
+        // Get compartment and check capacity
+        let compartment = null;
+        if (compartmentId) {
+          compartment = await Compartment.findById(compartmentId);
+          if (!compartment) {
+            results.failed.push({ itemId, reason: 'Compartment not found' });
+            continue;
+          }
+
+          // Calculate total size needed
+          const totalSize = item.size * item.quantity;
+            
+          // Check if total size fits in compartment remaining capacity
+          if (totalSize > compartment.remainingCapacity) {
+            results.failed.push({ 
+              itemId, 
+              reason: `Total item size (${totalSize}) exceeds compartment remaining capacity (${compartment.remainingCapacity})` 
+            });
+            continue;
+          }
         }
 
         // If item already has a compartment, remove it from the old one
@@ -306,13 +338,15 @@ exports.applyCompartmentAssignments = async (req, res) => {
           }
         }
 
-        // Update item with new compartment
-        item.compartment_id = compartmentId;
+        // Update item with new compartment (or null to remove assignment)
+        item.compartment_id = compartmentId || null;
         await item.save();
 
-        // Update compartment remainingCapacity
-        compartment.addItem(item.size, item.quantity);
-        await compartment.save();
+        // Update compartment remainingCapacity if we have a new compartment
+        if (compartment) {
+          compartment.addItem(item.size, item.quantity);
+          await compartment.save();
+        }
 
         results.success.push(itemId);
       } catch (error) {

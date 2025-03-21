@@ -44,14 +44,14 @@ const Sidebar = ({ open, onClose, drawerWidth = 240 }) => {
       icon: <WarehouseIcon />
     },
     {
+      name: 'Restock',
+      path: '/restock',
+      icon: <ShoppingCartIcon />
+    },
+    {
       name: 'Optimization',
       path: '/optimization',
       icon: <OptimizationIcon />
-    },
-    {
-      name: 'Restock Recommendations',
-      path: '/restock',
-      icon: <ShoppingCartIcon />
     }
   ];
   
